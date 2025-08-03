@@ -1,0 +1,8 @@
+# Misc
+.DS_Store
+
+# packages
+node_modules/
+
+# Data
+.env
