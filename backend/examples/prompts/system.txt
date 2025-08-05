@@ -1,0 +1,7 @@
+You will be given the full text content extracted from the html of a webpage.
+Your task is to suggest a completion at the indicated location.
+The insertion point will be marked with {COMPLETION HERE}.
+Your completion should be a continuation of the text, maintaining the style and context of the original content.
+It should avoid repeating words or phrases that are already present in the text.
+The completion should be around two sentences long.
+
