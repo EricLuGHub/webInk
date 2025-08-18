@@ -1,243 +1,211 @@
-const SUGGESTION = "test";
+let active: HTMLElement | null = null;
 
-type Typable = HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+const MARKER = "{BABADOOK}";
+const LOG_FULL_PAGE = true;      // set false to log only the field preview
+const CHUNK = 1_000_000;
 
-let active: Typable | null = null;
-let inputOverlay: HTMLDivElement | null = null;
-let ceOverlay: HTMLDivElement | null = null;
-let rafId: number | null = null;
-
-function isTypable(x: Element | null): x is Typable {
-    if (!x) return false;
-    if (x instanceof HTMLTextAreaElement) return true;
-    if (x instanceof HTMLInputElement) {
-        const t = (x.type || "").toLowerCase();
-        if (t === "password" || t === "hidden" || x.readOnly || x.disabled) return false;
-        return ["text", "search", "email", "url", "tel", "number"].includes(t) || t === "";
+function isPassword(el: Element | null): boolean {
+    return el instanceof HTMLInputElement && (el.type || "").toLowerCase() === "password";
+}
+function isEditable(el: Element | null): el is HTMLElement {
+    if (!(el instanceof HTMLElement)) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === "textarea") return true;
+    if (tag === "input") {
+        const t = (el as HTMLInputElement).type?.toLowerCase();
+        if (t === "hidden" || t === "button" || t === "submit" || t === "reset" || t === "image") return false;
+        return true;
     }
-    if (x instanceof HTMLElement) {
-        const ed = x.getAttribute("contenteditable");
-        return (ed === "" || ed === "true") && !x.hasAttribute("aria-hidden");
-    }
+    if (el.isContentEditable) return true;
+    const role = el.getAttribute("role");
+    if (role === "textbox" || role === "searchbox") return true;
     return false;
 }
-
-function ensureOverlays() {
-    if (!inputOverlay) {
-        inputOverlay = document.createElement("div");
-        inputOverlay.style.position = "absolute";
-        inputOverlay.style.pointerEvents = "none";
-        inputOverlay.style.zIndex = "2147483647";
-        inputOverlay.style.whiteSpace = "pre-wrap";
-        inputOverlay.style.visibility = "hidden";
-        inputOverlay.style.overflow = "hidden";
-        document.documentElement.appendChild(inputOverlay);
-    }
-    if (!ceOverlay) {
-        ceOverlay = document.createElement("div");
-        ceOverlay.style.position = "absolute";
-        ceOverlay.style.pointerEvents = "none";
-        ceOverlay.style.zIndex = "2147483647";
-        ceOverlay.style.whiteSpace = "pre";
-        ceOverlay.style.visibility = "hidden";
-        document.documentElement.appendChild(ceOverlay);
-    }
+function shouldHandle(el: Element | null) {
+    return isEditable(el) && !isPassword(el);
 }
 
-function escapeHtml(s: string) {
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+function doctypeString(): string {
+    const d = document;
+    const dt = d.doctype
+        ? `<!DOCTYPE ${d.doctype.name}${d.doctype.publicId ? ` PUBLIC "${d.doctype.publicId}"` : ""}${d.doctype.systemId ? ` "${d.doctype.systemId}"` : ""}>`
+        : "";
+    return dt ? dt + "\n" : "";
 }
 
-function copyTextStyles(from: HTMLElement, to: HTMLElement) {
-    const cs = getComputedStyle(from);
-    const props = [
-        "fontFamily","fontSize","fontWeight","fontStyle","letterSpacing","lineHeight",
-        "textTransform","textDecoration","wordBreak","overflowWrap","textAlign"
-    ];
-    for (const p of props) to.style.setProperty(p, cs.getPropertyValue(p));
-    to.style.color = cs.color;
-    to.style.padding = `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`;
-    to.style.boxSizing = cs.boxSizing;
-    to.style.background = "transparent";
-    to.style.borderRadius = cs.borderRadius;
-}
-
-function atTextEnd(el: HTMLInputElement | HTMLTextAreaElement) {
-    const s = el.selectionStart ?? el.value.length;
-    const e = el.selectionEnd ?? el.value.length;
-    return s === e && s === el.value.length;
-}
-
-function placeInputOverlay(el: HTMLInputElement | HTMLTextAreaElement) {
-    if (!inputOverlay) return;
-    const r = el.getBoundingClientRect();
-    inputOverlay.style.left = `${r.left + window.scrollX}px`;
-    inputOverlay.style.top = `${r.top + window.scrollY}px`;
-    inputOverlay.style.width = `${r.width}px`;
-    inputOverlay.style.height = `${r.height}px`;
-    copyTextStyles(el, inputOverlay);
-    inputOverlay.style.whiteSpace = el instanceof HTMLTextAreaElement ? "pre-wrap" : "pre";
-    if (!atTextEnd(el)) {
-        inputOverlay.style.visibility = "hidden";
-        inputOverlay.innerHTML = "";
-        return;
-    }
-    const before = escapeHtml(el.value);
-    const color = getComputedStyle(el).color;
-    inputOverlay.innerHTML =
-        `<span style="color:transparent;-webkit-text-fill-color:transparent">${before}</span>` +
-        `<span style="opacity:.45;color:${color}">${escapeHtml(SUGGESTION)}</span>`;
-    inputOverlay.style.visibility = "visible";
-    inputOverlay.scrollTop = el.scrollTop;
-    inputOverlay.scrollLeft = el.scrollLeft;
-}
-
-function caretRectInEditable(ed: HTMLElement): DOMRect | null {
-    const sel = document.getSelection();
-    if (!sel || !sel.rangeCount) return null;
-    const r = sel.getRangeAt(0);
-    if (!ed.contains(r.startContainer)) return null;
-    const c = r.cloneRange();
-    c.collapse(true);
-    const rect = c.getClientRects()[0] || c.getBoundingClientRect();
-    return rect || null;
-}
-
-function placeCEOverlay(ed: HTMLElement) {
-    if (!ceOverlay) return;
-    const rect = caretRectInEditable(ed);
-    if (!rect) {
-        ceOverlay.style.visibility = "hidden";
-        ceOverlay.innerHTML = "";
-        return;
-    }
-    copyTextStyles(ed, ceOverlay);
-    ceOverlay.style.left = `${rect.left + window.scrollX}px`;
-    ceOverlay.style.top = `${rect.top + window.scrollY}px`;
-    ceOverlay.innerHTML = `<span style="opacity:.45;color:${getComputedStyle(ed).color}">${escapeHtml(SUGGESTION)}</span>`;
-    ceOverlay.style.visibility = "visible";
-}
-
-function render() {
-    if (!active) {
-        if (inputOverlay) inputOverlay.style.visibility = "hidden";
-        if (ceOverlay) ceOverlay.style.visibility = "hidden";
-        return;
-    }
-    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-        if (ceOverlay) ceOverlay.style.visibility = "hidden";
-        placeInputOverlay(active);
-    } else {
-        if (inputOverlay) inputOverlay.style.visibility = "hidden";
-        placeCEOverlay(active);
-    }
-}
-
-function startLoop() {
-    if (rafId !== null) return;
-    const tick = () => {
-        render();
-        rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-}
-
-function stopLoop() {
-    if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-    }
-}
-
-function onFocusIn(e: FocusEvent) {
-    const t = e.target as Element | null;
-    active = isTypable(t) ? t : null;
-    ensureOverlays();
-    if (active) startLoop(); else stopLoop();
-}
-
-function onBlur(e: FocusEvent) {
-    const t = e.target as Element | null;
-    if (active && t === active) {
-        active = null;
-        stopLoop();
-        render();
-    }
-}
-
-function shouldAccept() {
-    if (!active) return false;
-    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return atTextEnd(active);
-    const sel = document.getSelection();
-    if (!sel || !sel.rangeCount) return false;
-    const r = sel.getRangeAt(0);
-    return active.contains(r.startContainer);
-}
-
-async function typeIntoInput(el: HTMLInputElement | HTMLTextAreaElement, text: string) {
-    for (const ch of text) {
-        const s = el.selectionStart ?? el.value.length;
-        const e = el.selectionEnd ?? el.value.length;
-        el.setRangeText(ch, s, e, "end");
-        const evt = new InputEvent("input", { bubbles: true, inputType: "insertText", data: ch } as any);
-        el.dispatchEvent(evt);
-        await new Promise(r => setTimeout(r, 8));
-    }
-}
-
-async function typeIntoEditable(ed: HTMLElement, text: string) {
-    for (const ch of text) {
-        const ok = document.execCommand("insertText", false, ch);
-        if (!ok) {
-            const sel = document.getSelection();
-            if (!sel) return;
-            if (!sel.rangeCount) return;
-            const range = sel.getRangeAt(0);
-            range.deleteContents();
-            range.insertNode(document.createTextNode(ch));
-            range.collapse(false);
+function cssPath(el: Element): string {
+    const parts: string[] = [];
+    let e: Element | null = el;
+    while (e && e.nodeType === 1 && e !== document.documentElement) {
+        const name = e.nodeName.toLowerCase();
+        let idx = 1;
+        let sib = e.previousElementSibling;
+        while (sib) {
+            if (sib.nodeName.toLowerCase() === name) idx++;
+            sib = sib.previousElementSibling;
         }
-        ed.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: ch } as any));
-        await new Promise(r => setTimeout(r, 8));
+        parts.unshift(`${name}:nth-of-type(${idx})`);
+        e = e.parentElement;
     }
+    return "html>" + parts.join(">");
 }
 
-async function acceptSuggestion() {
-    if (!active) return;
-    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-        await typeIntoInput(active, SUGGESTION);
+function pathFrom(root: Node, node: Node): number[] | null {
+    const path: number[] = [];
+    let n: Node | null = node;
+    while (n && n !== root) {
+        const p = n.parentNode;
+        if (!p) return null;
+        const idx = Array.prototype.indexOf.call(p.childNodes, n);
+        if (idx < 0) return null;
+        path.push(idx);
+        n = p;
+    }
+    if (n !== root) return null;
+    path.reverse();
+    return path;
+}
+function nodeAt(root: Node, path: number[] | null): Node | null {
+    if (!path) return null;
+    let n: Node = root;
+    for (const i of path) {
+        const next = n.childNodes[i];
+        if (!next) return null;
+        n = next;
+    }
+    return n;
+}
+
+function previewForInput(el: HTMLInputElement | HTMLTextAreaElement, marker: string) {
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    return el.value.slice(0, start) + marker + el.value.slice(end);
+}
+
+function clonePageWithMarker(target: HTMLElement, marker: string): { fieldPreview: string; pageHTML?: string } {
+    const root = document.documentElement;
+    const cloneRoot = root.cloneNode(true) as HTMLElement;
+
+    const elPath = pathFrom(root, target);
+    const targetClone = nodeAt(cloneRoot, elPath) as HTMLElement | null;
+
+    let fieldPreview = "";
+
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        fieldPreview = previewForInput(target, marker);
+        if (targetClone instanceof HTMLInputElement) {
+            targetClone.setAttribute("value", fieldPreview);
+        } else if (targetClone && targetClone.tagName?.toLowerCase() === "textarea") {
+            targetClone.textContent = fieldPreview;
+        }
+    } else if (target.isContentEditable) {
+        fieldPreview = "";
+        const sel = document.getSelection();
+        if (sel && sel.rangeCount && target.contains(sel.anchorNode)) {
+            const r = sel.getRangeAt(0);
+            const startPath = pathFrom(root, r.startContainer);
+            const endPath = pathFrom(root, r.endContainer);
+            const startNode = nodeAt(cloneRoot, startPath);
+            const endNode = nodeAt(cloneRoot, endPath);
+            if (startNode && endNode) {
+                const cr = document.createRange();
+                cr.setStart(startNode, r.startOffset);
+                cr.setEnd(endNode, r.endOffset);
+                if (cr.collapsed) {
+                    cr.insertNode(document.createTextNode(marker));
+                    cr.collapse(true);
+                } else {
+                    cr.deleteContents();
+                    cr.insertNode(document.createTextNode(marker));
+                    cr.collapse(false);
+                }
+            } else if (targetClone) {
+                targetClone.appendChild(document.createTextNode(marker));
+            }
+            if (targetClone) fieldPreview = targetClone.innerHTML;
+        } else if (targetClone) {
+            targetClone.appendChild(document.createTextNode(marker));
+            fieldPreview = targetClone.innerHTML;
+        }
+    }
+
+    let pageHTML: string | undefined;
+    if (LOG_FULL_PAGE) {
+        pageHTML = doctypeString() + (cloneRoot.outerHTML ?? "");
+    }
+
+    return { fieldPreview, pageHTML };
+}
+
+function chunkLog(label: string, s: string) {
+    if (!s) return;
+    if (s.length <= CHUNK) {
+        console.log(label, s);
     } else {
-        await typeIntoEditable(active, SUGGESTION);
+        for (let i = 0; i < s.length; i += CHUNK) {
+            console.log(label, s.slice(i, i + CHUNK));
+        }
     }
 }
 
-function onKeyDown(e: KeyboardEvent) {
-    if (e.key === "Tab" && shouldAccept()) {
-        e.preventDefault();
-        acceptSuggestion().then(() => render());
-        return;
-    }
+function logVirtualInsert(target: HTMLElement) {
+    const { fieldPreview, pageHTML } = clonePageWithMarker(target, MARKER);
+    const sel = cssPath(target);
+    if (fieldPreview) chunkLog(`FIELD_PREVIEW ${sel}`, fieldPreview);
+    if (pageHTML) chunkLog("PAGE_HTML_WITH_MARKER", pageHTML);
 }
 
-function onAny() {
-    if (!active) return;
-    render();
+function firstEditableFromEvent(e: Event): HTMLElement | null {
+    const path = (e as any).composedPath?.() as unknown[] | undefined;
+    if (path && path.length) {
+        for (const n of path) {
+            if (n instanceof HTMLElement && isEditable(n)) return n;
+        }
+    }
+    const t = e.target as HTMLElement | null;
+    return isEditable(t) ? t : null;
 }
 
-ensureOverlays();
-addEventListener("focusin", onFocusIn, true);
-addEventListener("blur", onBlur, true);
-addEventListener("keydown", onKeyDown, true);
-addEventListener("input", onAny, true);
-addEventListener("click", onAny, true);
-addEventListener("scroll", onAny, true);
-addEventListener("resize", onAny, true);
-document.addEventListener("selectionchange", onAny, true);
+addEventListener(
+    "focusin",
+    (e: FocusEvent) => {
+        const t = e.target as HTMLElement | null;
+        active = isEditable(t) ? t : null;
+        if (shouldHandle(active)) logVirtualInsert(active!);
+    },
+    true
+);
 
-new MutationObserver(() => {
-    if (active && !document.contains(active)) {
-        active = null;
-        stopLoop();
-        render();
-    }
-}).observe(document.documentElement, { childList: true, subtree: true });
+addEventListener(
+    "pointerdown",
+    (e: PointerEvent) => {
+        const t = firstEditableFromEvent(e);
+        active = t;
+    },
+    true
+);
+
+addEventListener(
+    "input",
+    (e: Event) => {
+        const el = e.target as HTMLElement;
+        if (!shouldHandle(el)) return;
+        logVirtualInsert(el);
+    },
+    true
+);
+
+// optional hotkey to log on demand
+addEventListener(
+    "keydown",
+    (e: KeyboardEvent) => {
+        const metaOrCtrl = e.metaKey || e.ctrlKey;
+        if (metaOrCtrl && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
+            if (shouldHandle(active)) {
+                e.preventDefault();
+                logVirtualInsert(active!);
+            }
+        }
+    },
+    true
+);
