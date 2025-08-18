@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-import prompt_router
+from prompt_router import prompt_router
 from config import Settings
 from db import Base, engine, SessionLocal
 from prompt_service import PromptService
@@ -25,12 +25,12 @@ async def lifespan(app: FastAPI):
     db.close()
 
 app = FastAPI(
-    title="SamozaOS World Interface",
+    title="WebInk",
     lifespan=lifespan,
 )
 
 
-app.include_router(prompt_router, prefix="/sap", tags=[])
+app.include_router(prompt_router, prefix="/prompt", tags=[])
 
 @app.get("/")
 async def root():

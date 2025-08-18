@@ -1,4 +1,12 @@
 from sqlalchemy.orm import Session
 
+from Requests.CompletionRequest import ConnectorAuthorizeRequest
+
+
 class PromptService:
-    pass
+
+    def __init__(self):
+        pass
+
+    def create_completion(self, request: ConnectorAuthorizeRequest):
+        pass
