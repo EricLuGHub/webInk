@@ -1,4 +1,4 @@
 from pydantic import BaseModel
 
-class ConnectorAuthorizeRequest(BaseModel):
+class CompletionRequest(BaseModel):
     web_page : str
