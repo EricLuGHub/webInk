@@ -6,6 +6,9 @@ from config import Settings
 from db import Base, engine, SessionLocal
 from prompt_service import PromptService
 
+from dotenv import load_dotenv
+load_dotenv()
+
 settings = Settings()
 
 
